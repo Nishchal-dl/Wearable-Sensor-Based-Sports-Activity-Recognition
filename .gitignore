@@ -124,3 +124,6 @@ Desktop.ini
 # ---------------------------------------------------------------------------
 *.log
 logs/
+
+# Project config (contains AWS account id)
+config/project_config.json

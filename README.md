@@ -95,3 +95,14 @@ estimation; monitoring; CI/CD; reproducible experiment tracking.
 or clinical decision-making; identifying individuals from gait/biometrics; collecting new
 sensor data or activities beyond PAMAP2's 18 labels; a real-time streaming endpoint
 (batch is primary; real-time is a future enhancement).
+
+## Running the notebooks
+
+Run in SageMaker Studio (region `us-east-1`, existing `LabRole`; no IAM resources are created), in order:
+
+1. `notebooks/1.0_setup.ipynb` - idempotently provisions S3 bucket, Glue database, Athena workgroup; writes `config/project_config.json` (git-ignored).
+2. `notebooks/1.1_ingest_raw_data.ipynb` - downloads PAMAP2, lands raw `.dat` in S3 and curated Parquet partitioned by session/subject.
+3. `notebooks/1.2_athena_catalog.ipynb` - creates `raw_pamap2` and `curated_pamap2` Athena tables.
+4. `notebooks/2.0_eda.ipynb` - EDA via Athena queries.
+
+Shared code lives in `src/pamap2/` (`config.py`, `schema.py`). Tests: `uv run pytest tests -q`. These notebooks create billable AWS resources.

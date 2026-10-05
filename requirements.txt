@@ -1,0 +1,9 @@
+boto3
+sagemaker
+pandas
+pyarrow
+matplotlib
+seaborn
+pytest
+nbformat
+requests
