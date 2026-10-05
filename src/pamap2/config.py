@@ -7,6 +7,7 @@ from pathlib import Path
 REGION = "us-east-1"
 PREFIX = "pamap2-har"
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "project_config.json"
+FEATURE_GROUP = "pamap2-har-windows"
 S3_ZONES = ("raw", "curated", "athena-results", "features", "models", "monitoring")
 
 
@@ -20,7 +21,8 @@ def build_config(account_id: str, region: str = REGION, prefix: str = PREFIX) ->
         "glue_database": prefix.replace("-", "_"),
         "athena_workgroup": f"{prefix}-wg",
         "role_arn": f"arn:aws:iam::{account_id}:role/LabRole",
-        "s3_prefixes": {z: f"{z}/" for z in S3_ZONES},
+        "s3_prefixes": {**{z: f"{z}/" for z in S3_ZONES}, "splits": "features/splits/"},
+        "feature_group": FEATURE_GROUP,
         "raw_table": "raw_pamap2",
         "curated_table": "curated_pamap2",
     }
@@ -37,7 +39,15 @@ def load_config(path: Path | str = CONFIG_PATH) -> dict:
     path = Path(path)
     if not path.exists():
         raise FileNotFoundError(f"{path} not found - run notebooks/1.0_setup.ipynb first.")
-    return json.loads(path.read_text())
+    return with_defaults(json.loads(path.read_text()))
+
+
+def with_defaults(cfg: dict) -> dict:
+    """Fill keys added after a config was first written (older project_config.json files)."""
+    cfg = dict(cfg)
+    cfg.setdefault("feature_group", FEATURE_GROUP)
+    cfg["s3_prefixes"] = {"splits": "features/splits/", **cfg.get("s3_prefixes", {})}
+    return cfg
 
 
 def s3_uri(cfg: dict, zone: str, key: str = "") -> str:

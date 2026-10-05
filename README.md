@@ -104,5 +104,7 @@ Run in SageMaker Studio (region `us-east-1`, existing `LabRole`; no IAM resource
 2. `notebooks/1.1_ingest_raw_data.ipynb` - downloads PAMAP2, lands raw `.dat` in S3 and curated Parquet partitioned by session/subject.
 3. `notebooks/1.2_athena_catalog.ipynb` - creates `raw_pamap2` and `curated_pamap2` Athena tables.
 4. `notebooks/2.0_eda.ipynb` - EDA via Athena queries.
+5. `notebooks/3.0_feature_engineering.ipynb` - builds 512-sample/50%-overlap window features, creates (or reuses) the offline-only SageMaker Feature Store group `pamap2-har-windows`, ingests, and verifies the offline row count via Athena (the offline store lags several minutes).
+6. `notebooks/3.1_data_split.ipynb` - reads the offline store, assigns chronological 40/10/10/40 train/validation/test/production splits per subject+activity (1-window gap between blocks; test/production use seen subjects, so scores are optimistic vs. LOSO), writes `features/splits/{train,validation,test,production}.parquet`, XGBoost CSVs (label first, no header), `feature_columns.json` and `label_map.json` (train classes only).
 
-Shared code lives in `src/pamap2/` (`config.py`, `schema.py`). Tests: `uv run pytest tests -q`. These notebooks create billable AWS resources.
+Shared code lives in `src/pamap2/` (`config.py`, `schema.py`, `features.py`, `split.py`). Tests: `uv run pytest tests -q`. These notebooks create billable AWS resources.

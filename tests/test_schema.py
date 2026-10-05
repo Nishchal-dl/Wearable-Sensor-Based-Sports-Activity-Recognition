@@ -68,3 +68,15 @@ def test_config_helpers(tmp_path):
     assert config.load_config(p) == cfg
     with pytest.raises(FileNotFoundError):
         config.load_config(tmp_path / "missing.json")
+
+
+def test_with_defaults_legacy_config():
+    from src.pamap2.config import with_defaults
+    legacy = build_config("123456789012")
+    legacy.pop("feature_group")
+    legacy["s3_prefixes"].pop("splits")
+    out = with_defaults(legacy)
+    assert out["feature_group"] == "pamap2-har-windows"
+    assert out["s3_prefixes"]["splits"] == "features/splits/"
+    assert out["s3_prefixes"]["curated"] == "curated/"
+    assert "splits" not in legacy["s3_prefixes"]
