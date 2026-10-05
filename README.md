@@ -118,6 +118,8 @@ Run in SageMaker Studio (region `us-east-1`, existing `LabRole`; no IAM resource
 14. `notebooks/6.3_dashboard.ipynb` - `put_dashboard` for `pamap2-har-ml` (job utilisation, monitoring metrics, alarm status, report links); prints the console URL. Job widgets use SEARCH expressions; the report-index link is only populated after 7.0.
 15. `notebooks/7.0_reports.ipynb` - one Clarify SHAP explainability job (`ml.m5.large`; Clarify runs a shadow endpoint inside the job and removes it) and the consolidated `monitoring/reports/index.json`.
 
-Monitoring cost/cleanup: all jobs are one-off (no MonitoringSchedule, no endpoint). Each notebook ends with a cleanup cell that lists (never deletes) monitoring schedules, deletes temporary `pamap2-har-mon*` model. Alarms and the dashboard are kept (delete them in CloudWatch when finished).
+Monitoring cost/cleanup: all jobs are one-off (no MonitoringSchedule, no endpoint). Each notebook ends with a cleanup cell that lists (never deletes) monitoring schedules, deletes temporary `pamap2-har-mon*` model. Alarms and the dashboard are kept until you run teardown.
+
+Teardown: `notebooks/9.0_teardown.ipynb` (logic in `src/pamap2/teardown.py`) removes every project resource (S3 bucket incl. versions, Feature Group, Glue/Athena, SageMaker models/packages, CloudWatch alarms/dashboard/log streams). It is a dry run by default; set `DRY_RUN=False` and `CONFIRM` to the bucket name to delete, `KEEP_DATA=True` to keep the bucket and `raw/`+`curated/`. WARNING: irreversible. IAM and `config/project_config.json` are never touched.
 
 Shared code lives in `src/pamap2/` (`config.py`, `schema.py`, `features.py`, `split.py`, `evaluation.py`, `benchmark.py`, `monitoring.py`). Tests: `uv run pytest tests -q`. These notebooks create billable AWS resources.
