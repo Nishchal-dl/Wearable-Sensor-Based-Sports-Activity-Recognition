@@ -10,6 +10,12 @@ CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "project_config.j
 FEATURE_GROUP = "pamap2-har-windows"
 MODEL_PACKAGE_GROUP = "pamap2-har-xgboost"
 XGBOOST_VERSION = "1.7-1"
+MONITORING_DEFAULTS = {
+    "monitoring_dashboard": "pamap2-har-ml",
+    "monitoring_alarm_prefix": "pamap2-har",
+    "monitoring_namespace": "pamap2-har/Monitoring",
+    "monitoring_drift_threshold": 0.05,
+}
 S3_ZONES = ("raw", "curated", "athena-results", "features", "models", "monitoring")
 
 
@@ -27,6 +33,7 @@ def build_config(account_id: str, region: str = REGION, prefix: str = PREFIX) ->
         "feature_group": FEATURE_GROUP,
         "model_package_group": MODEL_PACKAGE_GROUP,
         "xgboost_version": XGBOOST_VERSION,
+        **MONITORING_DEFAULTS,
         "raw_table": "raw_pamap2",
         "curated_table": "curated_pamap2",
     }
@@ -52,6 +59,8 @@ def with_defaults(cfg: dict) -> dict:
     cfg.setdefault("feature_group", FEATURE_GROUP)
     cfg.setdefault("model_package_group", MODEL_PACKAGE_GROUP)
     cfg.setdefault("xgboost_version", XGBOOST_VERSION)
+    for k, v in MONITORING_DEFAULTS.items():
+        cfg.setdefault(k, v)
     cfg["s3_prefixes"] = {"splits": "features/splits/", **cfg.get("s3_prefixes", {})}
     return cfg
 
