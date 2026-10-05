@@ -116,7 +116,7 @@ Run in SageMaker Studio (region `us-east-1`, existing `LabRole`; no IAM resource
 12. `notebooks/6.1_model_monitor.ipynb` - multiclass ModelQualityMonitor baseline on test predictions, one-off job on production predictions vs `true_activity_id`, drift check vs `xgboost_eval.json`; writes `monitoring/model-quality/{baseline,runs/<ts>}/` and publishes macro-F1/accuracy. Two `ml.m5.large` jobs. Scores are optimistic (seen subjects).
 13. `notebooks/6.2_infra_monitor.ipynb` - CloudWatch alarms (`pamap2-har-*`) on SageMaker job CPU/memory/disk and on the custom `pamap2-har/Monitoring` metrics (incl. job-failed 0/1). Job alarms are Metrics Insights query alarms per job namespace (they cover future jobs); custom-metric alarms use `TreatMissingData=ignore`. No SNS/EventBridge.
 14. `notebooks/6.3_dashboard.ipynb` - `put_dashboard` for `pamap2-har-ml` (job utilisation, monitoring metrics, alarm status, report links); prints the console URL. Job widgets use SEARCH expressions; the report-index link is only populated after 7.0.
-15. `notebooks/7.0_reports.ipynb` - one Clarify SHAP explainability job (`ml.m5.large`; Clarify runs a shadow endpoint inside the job and removes it) and the consolidated `monitoring/reports/index.json`.
+15. `notebooks/7.0_reports.ipynb` - local exact TreeSHAP explainability with XGBoost `pred_contribs` (Clarify is closed to new accounts; not billable) and the consolidated `monitoring/reports/index.json`.
 
 Monitoring cost/cleanup: all jobs are one-off (no MonitoringSchedule, no endpoint). Each notebook ends with a cleanup cell that lists (never deletes) monitoring schedules, deletes temporary `pamap2-har-mon*` model. Alarms and the dashboard are kept until you run teardown.
 

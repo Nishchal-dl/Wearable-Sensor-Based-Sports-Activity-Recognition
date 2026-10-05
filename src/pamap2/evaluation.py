@@ -77,10 +77,13 @@ def parse_probs(raw, k: int) -> np.ndarray:
     """Parse batch-transform CSV output (bytes or str) into an (n, k) probability array.
 
     Takes the last k columns, so joined output (input features then k probs) and plain output both work.
+    Newer XGBoost containers write each softprob row as a bracketed list ("[p1, p2, ...]"); the
+    brackets and quotes are stripped first.
     """
     import io
-    buf = io.BytesIO(raw) if isinstance(raw, (bytes, bytearray)) else io.StringIO(raw)
-    df = pd.read_csv(buf, header=None)
+    text = raw.decode() if isinstance(raw, (bytes, bytearray)) else raw
+    text = text.translate(str.maketrans("", "", '[]"'))
+    df = pd.read_csv(io.StringIO(text), header=None, skipinitialspace=True)
     if df.shape[1] < k:
         raise ValueError(f"expected at least {k} columns, got {df.shape[1]}")
     return df.iloc[:, -k:].to_numpy(float)

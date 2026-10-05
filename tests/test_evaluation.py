@@ -81,3 +81,7 @@ def test_parse_probs():
     assert plain.shape == (2, 3)
     with pytest.raises(ValueError):
         parse_probs("0.5,0.5" + chr(10), 3)
+    bracketed = parse_probs(("[0.1, 0.2, 0.7]" + chr(10) + "[0.3, 0.3, 0.4]" + chr(10)).encode(), 3)
+    assert bracketed.shape == (2, 3) and bracketed[0, 2] == 0.7
+    joined_br = parse_probs("1.5,2.5," + chr(34) + "[0.4, 0.6]" + chr(34) + chr(10), 2)
+    assert joined_br.tolist() == [[0.4, 0.6]]

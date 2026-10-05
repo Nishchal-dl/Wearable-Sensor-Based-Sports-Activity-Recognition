@@ -239,3 +239,20 @@ def test_empty_bucket_and_confirm_raises():
     with pytest.raises(ValueError):
         teardown(clients, {**CFG, "bucket": ""}, dry_run=False, confirm="")
     assert log == []
+
+
+def test_package_group_retried_until_packages_gone():
+    left = {"n": 2}
+    def group_delete(**kw):
+        if left["n"]:
+            left["n"] -= 1
+            return err("ValidationException", "Model Package Group x cannot be deleted because it still contains Model Packages.")
+        return {}
+    resp = full_resp()
+    resp[("sagemaker", "delete_model_package_group")] = group_delete
+    resp[("sagemaker", "describe_feature_group")] = err("ResourceNotFound")
+    clients, log = make(resp)
+    rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, sleep=lambda s: None)
+    grp = [r for r in rows if r["kind"] == "model_package_group"][0]
+    assert grp["status"] == "deleted", grp
+    assert sum(o == "delete_model_package_group" for _, o, _ in log) == 3

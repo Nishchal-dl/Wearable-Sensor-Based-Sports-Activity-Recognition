@@ -215,6 +215,20 @@ def _wait_gone(sm, name: str, wait_s: float, sleep, poll_s: float):
         elapsed += poll_s
 
 
+def _delete_package_group(sm, name: str, wait_s: float, sleep, poll_s: float):
+    """Package deletion is asynchronous; retry while the group still reports packages."""
+    elapsed = 0.0
+    while True:
+        try:
+            sm.delete_model_package_group(ModelPackageGroupName=name)
+            return
+        except ClientError as e:
+            if "still contains" not in e.response.get("Error", {}).get("Message", "") or elapsed >= wait_s:
+                raise
+        sleep(poll_s)
+        elapsed += poll_s
+
+
 def _delete(clients: dict, cfg: dict, r: Resource, keep_data: bool, wait_s, sleep, poll_s) -> str:
     sm, k = clients["sagemaker"], r.kind
     if k == "stop_training_job":
@@ -234,7 +248,7 @@ def _delete(clients: dict, cfg: dict, r: Resource, keep_data: bool, wait_s, slee
     elif k == "model_package":
         sm.delete_model_package(ModelPackageName=r.name)
     elif k == "model_package_group":
-        sm.delete_model_package_group(ModelPackageGroupName=r.name)
+        _delete_package_group(sm, r.name, wait_s, sleep, poll_s)
     elif k == "feature_group":
         if r.extra.get("status") != "Deleting":
             sm.delete_feature_group(FeatureGroupName=r.name)
