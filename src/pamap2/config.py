@@ -8,6 +8,8 @@ REGION = "us-east-1"
 PREFIX = "pamap2-har"
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "project_config.json"
 FEATURE_GROUP = "pamap2-har-windows"
+MODEL_PACKAGE_GROUP = "pamap2-har-xgboost"
+XGBOOST_VERSION = "1.7-1"
 S3_ZONES = ("raw", "curated", "athena-results", "features", "models", "monitoring")
 
 
@@ -23,6 +25,8 @@ def build_config(account_id: str, region: str = REGION, prefix: str = PREFIX) ->
         "role_arn": f"arn:aws:iam::{account_id}:role/LabRole",
         "s3_prefixes": {**{z: f"{z}/" for z in S3_ZONES}, "splits": "features/splits/"},
         "feature_group": FEATURE_GROUP,
+        "model_package_group": MODEL_PACKAGE_GROUP,
+        "xgboost_version": XGBOOST_VERSION,
         "raw_table": "raw_pamap2",
         "curated_table": "curated_pamap2",
     }
@@ -46,6 +50,8 @@ def with_defaults(cfg: dict) -> dict:
     """Fill keys added after a config was first written (older project_config.json files)."""
     cfg = dict(cfg)
     cfg.setdefault("feature_group", FEATURE_GROUP)
+    cfg.setdefault("model_package_group", MODEL_PACKAGE_GROUP)
+    cfg.setdefault("xgboost_version", XGBOOST_VERSION)
     cfg["s3_prefixes"] = {"splits": "features/splits/", **cfg.get("s3_prefixes", {})}
     return cfg
 
