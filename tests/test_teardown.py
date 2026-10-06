@@ -186,7 +186,7 @@ def test_plan_order_stable():
 
 
 def test_missing_config(tmp_path):
-    with pytest.raises(FileNotFoundError, match="1.0_setup"):
+    with pytest.raises(FileNotFoundError, match="1_setup"):
         load_config(tmp_path / "none.json")
 
 

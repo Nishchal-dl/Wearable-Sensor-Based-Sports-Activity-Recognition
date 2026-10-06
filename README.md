@@ -100,26 +100,27 @@ sensor data or activities beyond PAMAP2's 18 labels; a real-time streaming endpo
 
 Run in SageMaker Studio (region `us-east-1`, existing `LabRole`; no IAM resources are created), in order:
 
-1. `notebooks/1.0_setup.ipynb` - idempotently provisions S3 bucket, Glue database, Athena workgroup; writes `config/project_config.json` (git-ignored).
-2. `notebooks/1.1_ingest_raw_data.ipynb` - downloads PAMAP2, lands raw `.dat` in S3 and curated Parquet partitioned by session/subject.
-3. `notebooks/1.2_athena_catalog.ipynb` - creates `raw_pamap2` and `curated_pamap2` Athena tables.
-4. `notebooks/2.0_eda.ipynb` - EDA via Athena queries.
-5. `notebooks/3.0_feature_engineering.ipynb` - builds 512-sample/50%-overlap window features, creates (or reuses) the offline-only SageMaker Feature Store group `pamap2-har-windows`, ingests, and verifies the offline row count via Athena (the offline store lags several minutes).
-6. `notebooks/3.1_data_split.ipynb` - reads the offline store, assigns chronological 40/10/10/40 train/validation/test/production splits per subject+activity (1-window gap between blocks; test/production use seen subjects, so scores are optimistic vs. LOSO), writes `features/splits/{train,validation,test,production}.parquet`, XGBoost CSVs (label first, no header), `feature_columns.json` and `label_map.json` (train classes only).
+1. `notebooks/1_setup.ipynb` - idempotently provisions S3 bucket, Glue database, Athena workgroup; writes `config/project_config.json` (git-ignored).
+2. `notebooks/2_data_pipeline.ipynb` - sections:
+   - 1.1 ingest: downloads PAMAP2, lands raw `.dat` in S3 and curated Parquet partitioned by session/subject.
+   - 1.2 Athena catalog: creates `raw_pamap2` and `curated_pamap2` Athena tables.
+   - 2.0 EDA via Athena queries.
+   - 3.0 feature engineering: builds 512-sample/50%-overlap window features, creates (or reuses) the offline-only SageMaker Feature Store group `pamap2-har-windows`, ingests, and verifies the offline row count via Athena (the offline store lags several minutes).
+   - 3.1 data split: reads the offline store, assigns chronological 40/10/10/40 train/validation/test/production splits per subject+activity (1-window gap between blocks; test/production use seen subjects, so scores are optimistic vs. LOSO), writes `features/splits/{train,validation,test,production}.parquet`, XGBoost CSVs (label first, no header), `feature_columns.json` and `label_map.json` (train classes only).
+3. `notebooks/3_train_evaluate_deploy.ipynb` - sections:
+   - 4.0 benchmark: local depth-3 decision tree on chest acc16 magnitude std + HR mean (plus a majority-class floor); writes `models/reports/benchmark.json`. Negligible cost.
+   - 4.1 train: built-in SageMaker XGBoost 1.7-1 (`multi:softprob`, fixed hyperparameters, early stopping) on one `ml.m5.xlarge` with Debugger rules (LossNotDecreasing, Overfit, ClassImbalance, XGBoost report); registers a `PendingManualApproval` package in `pamap2-har-xgboost`. Billable training job (minutes).
+   - 4.2 evaluate: batch transform (`ml.m5.large` x1) on the test split, benchmark-vs-XGBoost table (macro-F1 headline), confusion matrix, `models/reports/xgboost_eval.json`. Ends with the manual approval gate: set `APPROVE = True` only if satisfied (default `False` approves nothing).
+   - 5.0 deploy: batch transform on the production split using the evaluated package, which must be Approved (otherwise the section stops with a message); input/output join enabled for Part D; writes `models/predictions/production/`. No real-time endpoint is created, so nothing keeps running or billing after the notebooks finish.
+4. `notebooks/4_monitoring_reports.ipynb` - sections:
+   - 6.0 data monitor: Model Monitor data-quality baseline on train features, then a one-off analyzer job on production features; writes `monitoring/data-quality/{baseline,runs/<ts>}/` (statistics, constraints, violations) and publishes `DataViolationCount`. Two `ml.m5.large` processing jobs.
+   - 6.1 model monitor: multiclass ModelQualityMonitor baseline on test predictions, one-off job on production predictions vs `true_activity_id`, drift check vs `xgboost_eval.json`; writes `monitoring/model-quality/{baseline,runs/<ts>}/` and publishes macro-F1/accuracy. Two `ml.m5.large` jobs. Scores are optimistic (seen subjects).
+   - 6.2 infrastructure monitor: CloudWatch alarms (`pamap2-har-*`) on SageMaker job CPU/memory/disk and on the custom `pamap2-har/Monitoring` metrics (incl. job-failed 0/1). Job alarms are Metrics Insights query alarms per job namespace (they cover future jobs); custom-metric alarms use `TreatMissingData=ignore`. No SNS/EventBridge.
+   - 6.3 dashboard: `put_dashboard` for `pamap2-har-ml` (job utilisation, monitoring metrics, alarm status, report links); prints the console URL. Job widgets use SEARCH expressions; the report-index link is only populated after 7.0.
+   - 7.0 reports: local exact TreeSHAP explainability with XGBoost `pred_contribs` (Clarify is closed to new accounts; not billable) and the consolidated `monitoring/reports/index.json`.
 
-7. `notebooks/4.0_benchmark.ipynb` - local depth-3 decision tree on chest acc16 magnitude std + HR mean (plus a majority-class floor); writes `models/reports/benchmark.json`. Negligible cost.
-8. `notebooks/4.1_train_xgboost.ipynb` - built-in SageMaker XGBoost 1.7-1 (`multi:softprob`, fixed hyperparameters, early stopping) on one `ml.m5.xlarge` with Debugger rules (LossNotDecreasing, Overfit, ClassImbalance, XGBoost report); registers a `PendingManualApproval` package in `pamap2-har-xgboost`. Billable training job (minutes).
-9. `notebooks/4.2_evaluate.ipynb` - batch transform (`ml.m5.large` x1) on the test split, benchmark-vs-XGBoost table (macro-F1 headline), confusion matrix, `models/reports/xgboost_eval.json`. The final cell is a manual approval step - run it only if satisfied.
-10. `notebooks/5.0_deploy.ipynb` - batch transform on the production split using the latest Approved package (input/output join enabled for Part D); writes `models/predictions/production/`. No real-time endpoint is created, so nothing keeps running or billing after the notebooks finish.
+Monitoring cost/cleanup: all jobs are one-off (no MonitoringSchedule, no endpoint). The monitoring notebook ends with a single cleanup cell that lists (never deletes) monitoring schedules, deletes temporary `pamap2-har-mon*` model. Alarms and the dashboard are kept until you run teardown.
 
-11. `notebooks/6.0_data_monitor.ipynb` - Model Monitor data-quality baseline on train features, then a one-off analyzer job on production features; writes `monitoring/data-quality/{baseline,runs/<ts>}/` (statistics, constraints, violations) and publishes `DataViolationCount`. Two `ml.m5.large` processing jobs.
-12. `notebooks/6.1_model_monitor.ipynb` - multiclass ModelQualityMonitor baseline on test predictions, one-off job on production predictions vs `true_activity_id`, drift check vs `xgboost_eval.json`; writes `monitoring/model-quality/{baseline,runs/<ts>}/` and publishes macro-F1/accuracy. Two `ml.m5.large` jobs. Scores are optimistic (seen subjects).
-13. `notebooks/6.2_infra_monitor.ipynb` - CloudWatch alarms (`pamap2-har-*`) on SageMaker job CPU/memory/disk and on the custom `pamap2-har/Monitoring` metrics (incl. job-failed 0/1). Job alarms are Metrics Insights query alarms per job namespace (they cover future jobs); custom-metric alarms use `TreatMissingData=ignore`. No SNS/EventBridge.
-14. `notebooks/6.3_dashboard.ipynb` - `put_dashboard` for `pamap2-har-ml` (job utilisation, monitoring metrics, alarm status, report links); prints the console URL. Job widgets use SEARCH expressions; the report-index link is only populated after 7.0.
-15. `notebooks/7.0_reports.ipynb` - local exact TreeSHAP explainability with XGBoost `pred_contribs` (Clarify is closed to new accounts; not billable) and the consolidated `monitoring/reports/index.json`.
-
-Monitoring cost/cleanup: all jobs are one-off (no MonitoringSchedule, no endpoint). Each notebook ends with a cleanup cell that lists (never deletes) monitoring schedules, deletes temporary `pamap2-har-mon*` model. Alarms and the dashboard are kept until you run teardown.
-
-Teardown: `notebooks/9.0_teardown.ipynb` (logic in `src/pamap2/teardown.py`) removes every project resource (S3 bucket incl. versions, Feature Group, Glue/Athena, SageMaker models/packages, CloudWatch alarms/dashboard/log streams). It is a dry run by default; set `DRY_RUN=False` and `CONFIRM` to the bucket name to delete, `KEEP_DATA=True` to keep the bucket and `raw/`+`curated/`. WARNING: irreversible. IAM and `config/project_config.json` are never touched.
+Teardown: `notebooks/5_teardown.ipynb` (logic in `src/pamap2/teardown.py`) removes every project resource (S3 bucket incl. versions, Feature Group, Glue/Athena, SageMaker models/packages, CloudWatch alarms/dashboard/log streams). It is a dry run by default; set `DRY_RUN=False` and `CONFIRM` to the bucket name to delete, `KEEP_DATA=True` to keep the bucket and `raw/`+`curated/`. WARNING: irreversible. IAM and `config/project_config.json` are never touched.
 
 Shared code lives in `src/pamap2/` (`config.py`, `schema.py`, `features.py`, `split.py`, `evaluation.py`, `benchmark.py`, `monitoring.py`). Tests: `uv run pytest tests -q`. These notebooks create billable AWS resources.

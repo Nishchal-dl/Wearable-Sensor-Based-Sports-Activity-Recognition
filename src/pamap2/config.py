@@ -49,7 +49,7 @@ def save_config(cfg: dict, path: Path | str = CONFIG_PATH) -> Path:
 def load_config(path: Path | str = CONFIG_PATH) -> dict:
     path = Path(path)
     if not path.exists():
-        raise FileNotFoundError(f"{path} not found - run notebooks/1.0_setup.ipynb first.")
+        raise FileNotFoundError(f"{path} not found - run notebooks/1_setup.ipynb first.")
     return with_defaults(json.loads(path.read_text()))
 
 
