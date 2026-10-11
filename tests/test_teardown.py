@@ -49,6 +49,7 @@ def full_resp():
         ("sagemaker", "list_endpoint_configs"): {"EndpointConfigs": [{"EndpointConfigName": "pamap2-har-cfg"}]},
         ("sagemaker", "list_models"): {"Models": [{"ModelName": "pamap2-har-prod-1"}, {"ModelName": "other-x"}]},
         ("sagemaker", "list_model_packages"): {"ModelPackageSummaryList": [{"ModelPackageArn": "arn:pkg/1"}]},
+        ("sagemaker", "list_model_cards"): {"ModelCardSummaries": [{"ModelCardName": "pamap2-har-xgboost-card"}, {"ModelCardName": "other-card"}]},
         ("sagemaker", "describe_feature_group"): {"FeatureGroupStatus": "Created"},
         ("glue", "get_tables"): {"TableList": [{"Name": "raw_pamap2"}]},
         ("cloudwatch", "describe_alarms"): {"CompositeAlarms": [{"AlarmName": "pamap2-har-comp"}], "MetricAlarms": [{"AlarmName": "pamap2-har-a1"}, {"AlarmName": "pamap2-harx"}]},
@@ -74,7 +75,7 @@ def test_dry_run_no_deletes_and_lists_everything():
     rows = teardown(clients, CFG, dry_run=True)
     assert deletes(log) == []
     kinds = {r["kind"] for r in rows}
-    assert {"stop_training_job", "model", "model_package", "feature_group", "glue_table", "alarm",
+    assert {"stop_training_job", "model", "model_package", "model_card", "feature_group", "glue_table", "alarm",
             "log_stream", "s3_objects", "s3_bucket", "dashboard", "athena_workgroup"} <= kinds
     assert all(r["status"] == "planned" for r in rows)
 
@@ -90,8 +91,10 @@ def test_foreign_resources_not_listed_or_deleted():
     clients, log = make(full_resp())
     rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, sleep=lambda s: None)
     names = {r["name"] for r in rows}
-    assert "other-x" not in names and "pamap2-harx" not in names and "other/1" not in names
+    assert "other-x" not in names and "pamap2-harx" not in names and "other-card" not in names and "other/1" not in names
     assert not any(k.get("ModelName") == "other-x" for _, _, k in log)
+    cards = [k["ModelCardName"] for _, o, k in log if o == "delete_model_card"]
+    assert cards == ["pamap2-har-xgboost-card"]
 
 
 def test_confirmed_order_and_s3_before_bucket():
@@ -106,7 +109,8 @@ def test_confirmed_order_and_s3_before_bucket():
     seq = [o for _, o in deletes(log)]
     expected = ["stop_training_job", "stop_processing_job", "stop_transform_job",
                 "delete_monitoring_schedule", "delete_endpoint", "delete_endpoint_config", "delete_model",
-                "delete_model_package", "delete_model_package_group", "delete_feature_group",
+                "delete_model_package", "delete_model_package_group", "delete_model_card",
+                "delete_feature_group",
                 "delete_table", "delete_database", "delete_work_group", "delete_alarms",
                 "delete_dashboards", "delete_log_stream", "delete_objects", "delete_bucket"]
     firsts = [seq.index(o) for o in expected]

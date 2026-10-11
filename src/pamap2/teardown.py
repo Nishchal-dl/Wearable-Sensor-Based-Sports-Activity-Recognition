@@ -2,6 +2,7 @@
 
 Pure and client-injected: ``clients`` is a dict of boto3-like clients with keys
 ``s3, sagemaker, glue, athena, cloudwatch, logs``. Nothing here touches IAM.
+Covers SageMaker Model Cards (``pamap2-har-*``) alongside models, packages and feature groups.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ NOT_FOUND_MSGS = ("does not exist", "not found", "could not find")
 # Deletion order (spec: Boundaries & Constraints).
 ORDER = ("stop_training_job", "stop_processing_job", "stop_transform_job", "monitoring_schedule",
          "endpoint", "endpoint_config", "model", "model_package", "model_package_group",
-         "feature_group", "glue_table", "glue_database", "athena_workgroup", "alarm",
+         "model_card", "feature_group", "glue_table", "glue_database", "athena_workgroup", "alarm",
          "dashboard", "log_stream", "s3_objects", "s3_bucket")
 
 
@@ -112,6 +113,7 @@ def discover(clients: dict, cfg: dict, keep_data: bool = False, errors: list | N
         return [Resource("model_package", i["ModelPackageArn"]) for i in items]
     collect("model_package", packages)
     out.append(Resource("model_package_group", group))
+    collect("model_card", sm_list("model_card", "list_model_cards", "ModelCardSummaries", "ModelCardName"))
 
     def fg():
         status = None
@@ -249,6 +251,8 @@ def _delete(clients: dict, cfg: dict, r: Resource, keep_data: bool, wait_s, slee
         sm.delete_model_package(ModelPackageName=r.name)
     elif k == "model_package_group":
         _delete_package_group(sm, r.name, wait_s, sleep, poll_s)
+    elif k == "model_card":
+        sm.delete_model_card(ModelCardName=r.name)
     elif k == "feature_group":
         if r.extra.get("status") != "Deleting":
             sm.delete_feature_group(FeatureGroupName=r.name)

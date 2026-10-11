@@ -9,6 +9,7 @@ PREFIX = "pamap2-har"
 CONFIG_PATH = Path(__file__).resolve().parents[2] / "config" / "project_config.json"
 FEATURE_GROUP = "pamap2-har-windows"
 MODEL_PACKAGE_GROUP = "pamap2-har-xgboost"
+MODEL_CARD = "pamap2-har-xgboost-card"
 XGBOOST_VERSION = "1.7-1"
 MONITORING_DEFAULTS = {
     "monitoring_dashboard": "pamap2-har-ml",
@@ -32,6 +33,7 @@ def build_config(account_id: str, region: str = REGION, prefix: str = PREFIX) ->
         "s3_prefixes": {**{z: f"{z}/" for z in S3_ZONES}, "splits": "features/splits/"},
         "feature_group": FEATURE_GROUP,
         "model_package_group": MODEL_PACKAGE_GROUP,
+        "model_card": MODEL_CARD,
         "xgboost_version": XGBOOST_VERSION,
         **MONITORING_DEFAULTS,
         "raw_table": "raw_pamap2",
@@ -58,6 +60,7 @@ def with_defaults(cfg: dict) -> dict:
     cfg = dict(cfg)
     cfg.setdefault("feature_group", FEATURE_GROUP)
     cfg.setdefault("model_package_group", MODEL_PACKAGE_GROUP)
+    cfg.setdefault("model_card", MODEL_CARD)
     cfg.setdefault("xgboost_version", XGBOOST_VERSION)
     for k, v in MONITORING_DEFAULTS.items():
         cfg.setdefault(k, v)

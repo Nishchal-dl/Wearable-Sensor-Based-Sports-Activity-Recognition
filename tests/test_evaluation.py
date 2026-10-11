@@ -62,6 +62,7 @@ def test_config_defaults():
     cfg = with_defaults({"s3_prefixes": {}})
     assert cfg["model_package_group"] == "pamap2-har-xgboost" and cfg["xgboost_version"] == "1.7-1"
     assert build_config("1")["model_package_group"] == "pamap2-har-xgboost"
+    assert cfg["model_card"] == build_config("1")["model_card"] == "pamap2-har-xgboost-card"
 
 
 def test_unknown_and_nan_labels():
