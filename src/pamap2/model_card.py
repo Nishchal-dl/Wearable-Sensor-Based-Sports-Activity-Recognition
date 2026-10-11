@@ -43,7 +43,7 @@ def card_text() -> dict:
             "Chronological 40/10/10/40 train / validation / test / production split per subject and "
             "activity, with a one-window gap between blocks. Unweighted multi:softprob objective with early "
             "stopping on validation (hyperparameters are listed in the training details). SageMaker Debugger rules (LossNotDecreasing, "
-            "Overfit, ClassImbalance, XGBoost report) were attached; see the Debugger report path in the "
+            "Overfit, ClassImbalance) were attached; see the Debugger artifacts path in the "
             "additional information section."),
         "evaluation_observation": (
             "Test scores are optimistic: test windows come from subjects that also appear in training "

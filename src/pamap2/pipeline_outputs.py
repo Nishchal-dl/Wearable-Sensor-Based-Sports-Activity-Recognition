@@ -45,6 +45,12 @@ def training_report(job_desc: dict, image_uri: str, model_package_arn: str, exec
     }
 
 
+def rules_needing_attention(job_desc: dict) -> list[dict]:
+    """Debugger rules that errored or have no verdict yet (anything but NoIssuesFound/IssuesFound)."""
+    done = ("NoIssuesFound", "IssuesFound")
+    return [r for r in job_desc.get("DebugRuleEvaluationStatuses") or [] if r.get("RuleEvaluationStatus") not in done]
+
+
 def eval_report(evaluation: dict, label_map: dict, bench: dict, model_package_arn: str, **pointers) -> dict:
     """`xgboost_eval.json` from the evaluate step's evaluation.json.
 

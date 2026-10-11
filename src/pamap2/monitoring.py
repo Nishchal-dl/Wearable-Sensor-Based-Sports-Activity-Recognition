@@ -16,7 +16,6 @@ PIPELINE_NAMESPACE = "AWS/Sagemaker/ModelBuildingPipeline"
 JOB_METRICS = ("CPUUtilization", "MemoryUtilization", "DiskUtilization")
 DASHBOARD_MAX_BYTES = 800_000  # CloudWatch limit is 1 MB; keep headroom
 DEFAULT_DRIFT_THRESHOLD = MONITORING_DEFAULTS["monitoring_drift_threshold"]
-DEBUGGER_REPORT_PATH = "rule-output/CreateXgboostReport/xgboost_report.html"
 
 
 def to_monitor_csv(df: pd.DataFrame, feature_columns) -> str:

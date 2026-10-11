@@ -6,9 +6,18 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.pamap2.model_card import eval_metric_groups
-from src.pamap2.pipeline_outputs import eval_report, step_resources, training_report
+from src.pamap2.pipeline_outputs import eval_report, rules_needing_attention, step_resources, training_report
 
 ARN = "arn:aws:sagemaker:us-east-1:1:{}/{}"
+
+
+def test_rules_needing_attention():
+    def rule(n, st):
+        return {"RuleConfigurationName": n, "RuleEvaluationStatus": st}
+    desc = {"DebugRuleEvaluationStatuses": [rule("a", "Error"), rule("b", "IssuesFound"),
+                                            rule("c", "NoIssuesFound"), rule("d", "InProgress")]}
+    assert [r["RuleConfigurationName"] for r in rules_needing_attention(desc)] == ["a", "d"]
+    assert rules_needing_attention({}) == []
 
 
 def step(name, status, meta=None, reason=None):
