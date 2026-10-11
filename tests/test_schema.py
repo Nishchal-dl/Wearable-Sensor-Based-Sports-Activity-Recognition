@@ -74,9 +74,11 @@ def test_with_defaults_legacy_config():
     from src.pamap2.config import with_defaults
     legacy = build_config("123456789012")
     legacy.pop("feature_group")
+    legacy.pop("pipeline_name")
     legacy["s3_prefixes"].pop("splits")
     out = with_defaults(legacy)
     assert out["feature_group"] == "pamap2-har-windows"
+    assert out["pipeline_name"] == "pamap2-har-pipeline"
     assert out["s3_prefixes"]["splits"] == "features/splits/"
     assert out["s3_prefixes"]["curated"] == "curated/"
     assert "splits" not in legacy["s3_prefixes"]

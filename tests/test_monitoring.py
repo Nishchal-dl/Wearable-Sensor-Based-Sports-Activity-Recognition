@@ -1,5 +1,6 @@
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pandas as pd
@@ -7,8 +8,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from src.pamap2.config import MONITORING_DEFAULTS, build_config, with_defaults
-from src.pamap2.monitoring import (alarm_spec, dashboard_body, parse_violations, quality_drift,
-                                   report_index, to_model_quality_frame, to_monitor_csv)
+from src.pamap2.monitoring import (PIPELINE_NAMESPACE, alarm_spec, dashboard_body, parse_violations,
+                                   pipeline_alarm_spec, pipeline_status, quality_drift, report_index,
+                                   to_model_quality_frame, to_monitor_csv)
 
 
 def test_monitor_csv_order_and_header():
@@ -119,3 +121,61 @@ def test_model_quality_nan_prediction_probability():
                       "true_activity_id": [1, 2, 3]})
     f, dropped = to_model_quality_frame(p)
     assert dropped == 2 and f["prediction"].tolist() == [1]
+
+
+T0 = datetime(2026, 10, 11, 12, 0, tzinfo=timezone.utc)
+
+
+def _exec(arn, status, minutes_ago, minutes=10):
+    start = T0 - timedelta(minutes=minutes_ago)
+    return {"PipelineExecutionArn": arn, "PipelineExecutionStatus": status, "StartTime": start,
+            "LastModifiedTime": start + timedelta(minutes=minutes)}
+
+
+def test_pipeline_status_succeeded():
+    st = pipeline_status([_exec("old", "Failed", 120), _exec("new", "Succeeded", 5)],
+                         [{"StepName": "TrainModel", "StepStatus": "Succeeded"}])
+    assert st["executions"] == 2 and st["latest_arn"] == "new" and st["latest_status"] == "Succeeded"
+    assert st["failed"] == 0 and st["failed_steps"] == [] and st["duration_s"] == 600.0
+    assert st["status_counts"] == {"Failed": 1, "Succeeded": 1}
+    assert st["metrics"] == {"PipelineExecutionFailed": 0, "PipelineFailedSteps": 0}
+
+
+def test_pipeline_status_failed_steps():
+    steps = [{"StepName": "EvaluateModel", "StepStatus": "Succeeded"},
+             {"StepName": "MacroF1BelowThreshold", "StepStatus": "Failed", "FailureReason": "below"}]
+    st = pipeline_status([_exec("e", "Failed", 1)], steps)
+    assert st["failed"] == 1 and st["failed_steps"] == [{"step": "MacroF1BelowThreshold", "reason": "below"}]
+    assert st["metrics"] == {"PipelineExecutionFailed": 1, "PipelineFailedSteps": 1}
+
+
+def test_pipeline_status_no_executions():
+    st = pipeline_status([], [])
+    assert st["executions"] == 0 and st["metrics"] == {} and st["failed"] == 0 and st["failed_steps"] == []
+
+
+def test_pipeline_alarm_spec():
+    a = pipeline_alarm_spec("pipe")
+    assert a["AlarmName"] == "pamap2-har-pipeline-executionfailed"
+    assert a["Namespace"] == PIPELINE_NAMESPACE == "AWS/Sagemaker/ModelBuildingPipeline"
+    assert a["Dimensions"] == [{"Name": "PipelineName", "Value": "pipe"}]
+    assert a["Statistic"] == "Sum" and a["TreatMissingData"] == "notBreaching" and a["Threshold"] == 0.0
+    assert pipeline_alarm_spec("pipe", prefix="x", metric="ExecutionStopped")["AlarmName"] == "x-pipeline-executionstopped"
+
+
+def test_dashboard_body_pipeline_widget():
+    jm = [{"title": "t", "namespace": "/aws/sagemaker/TrainingJobs", "metric": "CPUUtilization"}] * 3
+    for custom, alarms in ((["V"], ["arn:a"]), ([], [])):
+        base = json.loads(dashboard_body("us-east-1", jm, custom, alarms, "ns"))["widgets"]
+        ws = json.loads(dashboard_body("us-east-1", jm, custom, alarms, "ns", pipeline_name="pipe"))["widgets"]
+        assert len(ws) == len(base) + 1 and ws[:-1] == base
+        w = ws[-1]
+        assert w["properties"]["title"] == "Pipeline executions" and w["properties"]["stat"] == "Sum"
+        assert [m[1] for m in w["properties"]["metrics"]] == ["ExecutionStarted", "ExecutionSucceeded", "ExecutionFailed"]
+        assert all(m[0] == PIPELINE_NAMESPACE and m[3] == "pipe" for m in w["properties"]["metrics"])
+        assert all(x["x"] + x["width"] <= 24 for x in ws)
+        for i, a in enumerate(ws):
+            for b in ws[i + 1:]:
+                assert (a["x"] + a["width"] <= b["x"] or b["x"] + b["width"] <= a["x"]
+                        or a["y"] + a["height"] <= b["y"] or b["y"] + b["height"] <= a["y"])
+        assert [x["y"] for x in ws] == sorted(x["y"] for x in ws)

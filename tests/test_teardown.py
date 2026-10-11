@@ -126,12 +126,13 @@ def test_already_torn_down_all_skipped():
     nf = err("ResourceNotFound")
     resp = {("sagemaker", "describe_feature_group"): nf, ("sagemaker", "delete_feature_group"): nf,
             ("sagemaker", "delete_model_package_group"): err("ValidationException", "Group does not exist"),
+            ("sagemaker", "delete_pipeline"): err("ResourceNotFound"),
             ("glue", "delete_database"): err("EntityNotFoundException"),
             ("athena", "delete_work_group"): err("InvalidRequestException", "WorkGroup is not found"),
             ("cloudwatch", "delete_dashboards"): err("ResourceNotFound"),
             ("s3", "list_object_versions"): err("NoSuchBucket"),
             ("s3", "delete_bucket"): err("NoSuchBucket")}
-    for op in ("list_training_jobs", "list_models", "list_model_packages"):
+    for op in ("list_training_jobs", "list_models", "list_model_packages", "list_pipeline_executions"):
         resp[("sagemaker", op)] = nf
     clients, _ = make(resp)
     rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, sleep=lambda s: None)
@@ -260,3 +261,95 @@ def test_package_group_retried_until_packages_gone():
     grp = [r for r in rows if r["kind"] == "model_package_group"][0]
     assert grp["status"] == "deleted", grp
     assert sum(o == "delete_model_package_group" for _, o, _ in log) == 3
+
+
+EX = "arn:aws:sagemaker:us-east-1:123456789012:pipeline/pamap2-har-pipeline/execution/abc123"
+EX2 = "arn:aws:sagemaker:us-east-1:123456789012:pipeline/pamap2-har-pipeline/execution/def456"
+
+
+def pipeline_resp():
+    resp = full_resp()
+    resp[("sagemaker", "describe_feature_group")] = err("ResourceNotFound")
+    resp[("sagemaker", "list_pipeline_executions")] = {"PipelineExecutionSummaries": [
+        {"PipelineExecutionArn": EX, "PipelineExecutionStatus": "Executing"},
+        {"PipelineExecutionArn": EX2, "PipelineExecutionStatus": "Succeeded"}]}
+    resp[("sagemaker", "list_pipeline_execution_steps")] = {"PipelineExecutionSteps": [
+        {"StepName": "CreateModel", "Metadata": {"Model": {"Arn": "arn:aws:sagemaker:us-east-1:123456789012:model/pipelines-abc-CreateModel-x"}}},
+        {"StepName": "Train", "Metadata": {"TrainingJob": {"Arn": "arn:training-job/t"}}}]}
+    resp[("logs", "describe_log_streams")] = lambda **kw: ({"logStreams": [
+        {"logStreamName": kw["logStreamNamePrefix"] + "Train-1/algo-1"}, {"logStreamName": "other/1"}]}
+        if kw["logGroupName"].endswith("TrainingJobs") and kw["logStreamNamePrefix"].startswith("pipelines-") else {})
+    return resp
+
+
+def test_pipeline_resources_discovered_and_ordered():
+    clients, log = make(pipeline_resp())
+    rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, sleep=lambda s: None)
+    assert not [r for r in rows if r["status"] == "failed"], rows
+    seq = [o for _, o in deletes(log)]
+    assert seq.index("stop_pipeline_execution") < seq.index("delete_pipeline") < seq.index("delete_model") \
+        < seq.index("delete_model_package")
+    stops = [k["PipelineExecutionArn"] for _, o, k in log if o == "stop_pipeline_execution"]
+    assert stops == [EX]
+    models = [k["ModelName"] for _, o, k in log if o == "delete_model"]
+    assert "pipelines-abc-CreateModel-x" in models and "other-x" not in models
+    streams = [k["logStreamName"] for _, o, k in log if o == "delete_log_stream"]
+    assert "pipelines-abc123-Train-1/algo-1" in streams and "pipelines-def456-Train-1/algo-1" in streams
+    assert "other/1" not in streams
+    pre = {k["logStreamNamePrefix"] for _, o, k in log if o == "describe_log_streams"}
+    assert {"pipelines-abc123-", "pipelines-def456-"} <= pre
+
+
+def test_pipeline_not_found_skipped():
+    resp = full_resp()
+    resp[("sagemaker", "describe_feature_group")] = err("ResourceNotFound")
+    resp[("sagemaker", "list_pipeline_executions")] = err("ResourceNotFound", "Pipeline does not exist")
+    resp[("sagemaker", "delete_pipeline")] = err("ResourceNotFound", "Pipeline does not exist")
+    clients, _ = make(resp)
+    rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, sleep=lambda s: None)
+    assert [r["status"] for r in rows if r["kind"] == "pipeline"] == ["skipped"]
+    assert not [r for r in rows if r["kind"] == "stop_pipeline_execution"]
+
+
+def test_pipeline_delete_retried_while_executions_stopping():
+    left = {"n": 2}
+
+    def delete_pipeline(**kw):
+        if left["n"]:
+            left["n"] -= 1
+            return err("ValidationException", "Cannot delete pipeline while executions are running.")
+        return {}
+    resp = pipeline_resp()
+    resp[("sagemaker", "delete_pipeline")] = delete_pipeline
+    clients, log = make(resp)
+    rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, sleep=lambda s: None)
+    assert [r["status"] for r in rows if r["kind"] == "pipeline"] == ["deleted"]
+    assert sum(o == "delete_pipeline" for _, o, _ in log) == 3
+
+
+def test_pipeline_dry_run_plans_only():
+    clients, log = make(pipeline_resp())
+    rows = teardown(clients, CFG, dry_run=True)
+    assert deletes(log) == []
+    assert {"pipeline", "stop_pipeline_execution"} <= {r["kind"] for r in rows}
+
+
+def test_pipeline_delete_timeout_fails_after_bounded_sleeps():
+    resp = pipeline_resp()
+    resp[("sagemaker", "delete_pipeline")] = err("ValidationException", "Cannot delete pipeline while executions are running.")
+    clients, log = make(resp)
+    sleeps = []
+    rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, wait_s=30, sleep=sleeps.append, poll_s=10)
+    assert [r["status"] for r in rows if r["kind"] == "pipeline"] == ["failed"]
+    assert len(sleeps) == 3
+    assert sum(o == "delete_pipeline" for _, o, _ in log) == 4
+
+
+def test_pipeline_delete_other_error_not_retried():
+    resp = pipeline_resp()
+    resp[("sagemaker", "delete_pipeline")] = err("AccessDeniedException", "User is not authorized")
+    clients, log = make(resp)
+    sleeps = []
+    rows = teardown(clients, CFG, dry_run=False, confirm=BUCKET, sleep=sleeps.append)
+    assert [r["status"] for r in rows if r["kind"] == "pipeline"] == ["failed"]
+    assert sum(o == "delete_pipeline" for _, o, _ in log) == 1 and not sleeps

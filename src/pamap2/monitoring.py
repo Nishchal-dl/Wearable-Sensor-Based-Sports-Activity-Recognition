@@ -12,6 +12,7 @@ JOB_NAMESPACES = {
     "transform": "/aws/sagemaker/TransformJobs",
     "processing": "/aws/sagemaker/ProcessingJobs",
 }
+PIPELINE_NAMESPACE = "AWS/Sagemaker/ModelBuildingPipeline"
 JOB_METRICS = ("CPUUtilization", "MemoryUtilization", "DiskUtilization")
 DASHBOARD_MAX_BYTES = 800_000  # CloudWatch limit is 1 MB; keep headroom
 DEFAULT_DRIFT_THRESHOLD = MONITORING_DEFAULTS["monitoring_drift_threshold"]
@@ -99,7 +100,8 @@ def alarm_spec(job_type: str, metric: str, threshold: float, prefix: str = "pama
 
 
 def dashboard_body(region: str, job_metrics: list[dict], custom_metrics: list[str], alarm_arns: list[str],
-                   namespace: str, links: dict[str, str] | None = None) -> str:
+                   namespace: str, links: dict[str, str] | None = None,
+                   pipeline_name: str | None = None) -> str:
     """CloudWatch dashboard JSON. job_metrics: [{title, namespace, metric}] drawn as SEARCH expressions."""
     md = "## pamap2-har ML monitoring\n" + "\n".join(f"- {k}: `{v}`" for k, v in (links or {}).items())
     y = 4
@@ -118,10 +120,51 @@ def dashboard_body(region: str, job_metrics: list[dict], custom_metrics: list[st
     if alarm_arns:
         widgets.append({"type": "alarm", "x": 12, "y": y, "width": 12, "height": 6,
                         "properties": {"title": "Alarm status", "alarms": list(alarm_arns)}})
+    if pipeline_name:
+        y += 6 if (custom_metrics or alarm_arns) else 0
+        widgets.append({"type": "metric", "x": 0, "y": y, "width": 12, "height": 6,
+                        "properties": {"title": "Pipeline executions", "region": region, "stat": "Sum",
+                                       "period": 300, "view": "timeSeries",
+                                       "metrics": [[PIPELINE_NAMESPACE, m, "PipelineName", pipeline_name]
+                                                   for m in ("ExecutionStarted", "ExecutionSucceeded",
+                                                             "ExecutionFailed")]}})
     body = json.dumps({"widgets": widgets})
     if len(body.encode()) > DASHBOARD_MAX_BYTES:
         raise ValueError(f"dashboard body {len(body.encode())} bytes exceeds {DASHBOARD_MAX_BYTES}")
     return body
+
+
+def pipeline_status(executions, steps) -> dict:
+    """Summarise pipeline executions (list_pipeline_executions items) and the latest execution's steps.
+
+    `failed` is 1 when the newest execution failed. Empty `executions` gives executions=0 and no metrics.
+    """
+    execs = sorted(executions, key=lambda e: e.get("StartTime") or 0, reverse=True)
+    if not execs:
+        return {"executions": 0, "latest_arn": None, "latest_status": None, "failed": 0, "failed_steps": [],
+                "duration_s": None, "status_counts": {}, "metrics": {}}
+    latest = execs[0]
+    counts: dict = {}
+    for e in execs:
+        counts[e["PipelineExecutionStatus"]] = counts.get(e["PipelineExecutionStatus"], 0) + 1
+    failed_steps = [{"step": st["StepName"], "reason": st.get("FailureReason", "")}
+                    for st in steps if st.get("StepStatus") == "Failed"]
+    start, end = latest.get("StartTime"), latest.get("LastModifiedTime")
+    duration = float((end - start).total_seconds()) if start and end else None
+    failed = int(latest["PipelineExecutionStatus"] == "Failed")
+    return {"executions": len(execs), "latest_arn": latest.get("PipelineExecutionArn"),
+            "latest_status": latest["PipelineExecutionStatus"], "failed": failed, "failed_steps": failed_steps,
+            "duration_s": duration, "status_counts": counts,
+            "metrics": {"PipelineExecutionFailed": failed, "PipelineFailedSteps": len(failed_steps)}}
+
+
+def pipeline_alarm_spec(pipeline_name: str, metric: str = "ExecutionFailed", threshold: float = 0,
+                        prefix: str = "pamap2-har", period: int = 300) -> dict:
+    """put_metric_alarm kwargs for a native SageMaker pipeline metric (dimension PipelineName)."""
+    return {"AlarmName": f"{prefix}-pipeline-{metric}".lower(), "Namespace": PIPELINE_NAMESPACE,
+            "MetricName": metric, "Dimensions": [{"Name": "PipelineName", "Value": pipeline_name}],
+            "Statistic": "Sum", "Period": period, "EvaluationPeriods": 1, "Threshold": float(threshold),
+            "ComparisonOperator": "GreaterThanThreshold", "TreatMissingData": "notBreaching"}
 
 
 def report_index(entries: dict) -> dict:

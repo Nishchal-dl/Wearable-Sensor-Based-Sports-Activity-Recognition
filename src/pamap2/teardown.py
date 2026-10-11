@@ -2,11 +2,13 @@
 
 Pure and client-injected: ``clients`` is a dict of boto3-like clients with keys
 ``s3, sagemaker, glue, athena, cloudwatch, logs``. Nothing here touches IAM.
-Covers SageMaker Model Cards (``pamap2-har-*``) alongside models, packages and feature groups.
+Covers SageMaker Model Cards (``pamap2-har-*``), the SageMaker Pipeline (executions, pipeline-created
+models and log streams) alongside models, packages and feature groups.
 """
 from __future__ import annotations
 
 import time
+import uuid
 from dataclasses import dataclass, field
 
 from botocore.exceptions import ClientError
@@ -20,8 +22,8 @@ NOT_FOUND_MSG_CODES = {"ValidationException", "InvalidRequestException"}
 NOT_FOUND_MSGS = ("does not exist", "not found", "could not find")
 
 # Deletion order (spec: Boundaries & Constraints).
-ORDER = ("stop_training_job", "stop_processing_job", "stop_transform_job", "monitoring_schedule",
-         "endpoint", "endpoint_config", "model", "model_package", "model_package_group",
+ORDER = ("stop_pipeline_execution", "stop_training_job", "stop_processing_job", "stop_transform_job",
+         "monitoring_schedule", "endpoint", "endpoint_config", "pipeline", "model", "model_package", "model_package_group",
          "model_card", "feature_group", "glue_table", "glue_database", "athena_workgroup", "alarm",
          "dashboard", "log_stream", "s3_objects", "s3_bucket")
 
@@ -93,6 +95,33 @@ def discover(clients: dict, cfg: dict, keep_data: bool = False, errors: list | N
             return [Resource(kind, i[name_key]) for i in items if is_project_name(i[name_key], prefix)]
         return run
 
+    pipe = cfg.get("pipeline_name")
+    execs_cache: list = []
+
+    def executions():
+        if not execs_cache:
+            execs_cache.append(_safe(_pages, sm.list_pipeline_executions, "PipelineExecutionSummaries",
+                                     PipelineName=pipe) if pipe else [])
+        return execs_cache[0]
+
+    def stop_execs():
+        return [Resource("stop_pipeline_execution", e["PipelineExecutionArn"])
+                for e in executions() if e.get("PipelineExecutionStatus") == "Executing"]
+
+    def pipeline_models():
+        res, seen = [], set()
+        for e in executions():
+            steps = _safe(_pages, sm.list_pipeline_execution_steps, "PipelineExecutionSteps",
+                          PipelineExecutionArn=e["PipelineExecutionArn"])
+            for st in steps:
+                arn = ((st.get("Metadata") or {}).get("Model") or {}).get("Arn", "")
+                name = arn.split("model/", 1)[1] if "model/" in arn else ""
+                if name and name not in seen:
+                    seen.add(name)
+                    res.append(Resource("model", name))
+        return res
+
+    collect("stop_pipeline_execution", stop_execs)
     collect("stop_training_job", sm_list("stop_training_job", "list_training_jobs",
                                          "TrainingJobSummaries", "TrainingJobName", StatusEquals="InProgress"))
     collect("stop_processing_job", sm_list("stop_processing_job", "list_processing_jobs",
@@ -105,6 +134,9 @@ def discover(clients: dict, cfg: dict, keep_data: bool = False, errors: list | N
     collect("endpoint_config", sm_list("endpoint_config", "list_endpoint_configs", "EndpointConfigs",
                                        "EndpointConfigName"))
     collect("model", sm_list("model", "list_models", "Models", "ModelName"))
+    collect("model", pipeline_models)
+    if pipe:
+        out.append(Resource("pipeline", pipe))
 
     group = cfg["model_package_group"]
 
@@ -160,6 +192,18 @@ def discover(clients: dict, cfg: dict, keep_data: bool = False, errors: list | N
                     for s in items if is_project_name(s["logStreamName"], prefix)]
         return res
     collect("log_stream", streams)
+
+    def pipeline_streams():
+        res = []
+        for e in executions():
+            pre = f"pipelines-{e['PipelineExecutionArn'].rsplit('/', 1)[-1]}-"
+            for lg in LOG_GROUPS:
+                items = _safe(_pages, clients["logs"].describe_log_streams, "logStreams",
+                              token_in="nextToken", logGroupName=lg, logStreamNamePrefix=pre)
+                res += [Resource("log_stream", x["logStreamName"], {"group": lg})
+                        for x in items if x["logStreamName"].startswith(pre)]
+        return res
+    collect("log_stream", pipeline_streams)
 
     out.append(Resource("s3_objects", bucket, {"keep_data": keep_data}))
     out.append(Resource("s3_bucket", bucket, {"keep_data": keep_data}))
@@ -231,9 +275,28 @@ def _delete_package_group(sm, name: str, wait_s: float, sleep, poll_s: float):
         elapsed += poll_s
 
 
+def _delete_pipeline(sm, name: str, wait_s: float, sleep, poll_s: float):
+    """Executions stop asynchronously; retry while the pipeline still reports running executions."""
+    elapsed = 0.0
+    while True:
+        try:
+            sm.delete_pipeline(PipelineName=name, ClientRequestToken=uuid.uuid4().hex)
+            return
+        except ClientError as e:
+            msg = e.response.get("Error", {}).get("Message", "").lower()
+            if is_not_found(e) or "execut" not in msg or elapsed >= wait_s:
+                raise
+        sleep(poll_s)
+        elapsed += poll_s
+
+
 def _delete(clients: dict, cfg: dict, r: Resource, keep_data: bool, wait_s, sleep, poll_s) -> str:
     sm, k = clients["sagemaker"], r.kind
-    if k == "stop_training_job":
+    if k == "stop_pipeline_execution":
+        sm.stop_pipeline_execution(PipelineExecutionArn=r.name, ClientRequestToken=uuid.uuid4().hex)
+    elif k == "pipeline":
+        _delete_pipeline(sm, r.name, wait_s, sleep, poll_s)
+    elif k == "stop_training_job":
         sm.stop_training_job(TrainingJobName=r.name)
     elif k == "stop_processing_job":
         sm.stop_processing_job(ProcessingJobName=r.name)
