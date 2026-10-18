@@ -1,44 +1,39 @@
-# Wearable Sensor-Based Sports Activity Recognition & Intensity Estimation
+# Wearable Sensor-Based Sports Activity Recognition
 
-End-to-end, cloud-native machine learning system that ingests synchronized wearable
-sensor data (tri-axial accelerometer, gyroscope, magnetometer, and heart rate) and
-predicts both the **physical activity** being performed and its **exertion intensity**
-(light / moderate / vigorous), using the fully labeled
+An end-to-end machine learning system on AWS SageMaker. It classifies the **physical
+activity** a person is doing from synchronized wearable sensor data (accelerometer,
+gyroscope, magnetometer and heart rate). It uses the labeled
 [PAMAP2](https://archive.ics.uci.edu/dataset/231/pamap2+physical+activity+monitoring)
-dataset.
+dataset. Each feature window also carries a derived **intensity** label (light /
+moderate / vigorous, from approximate METs).
 
-The point of this project is focused on
-**production-grade MLOps rigor**: a reproducible pipeline provisioned as real cloud
-infrastructure (AWS/SageMaker via Python CDK) covering ingestion, preprocessing, training
-and hyperparameter tuning, an evaluation-gated model registry, batch deployment,
-monitoring, and CI/CD.
+>  Project for **AAI-540 — Machine Learning Operations**, Team 5.
 
-> Built as the capstone deliverable for **AAI-540 — Machine Learning Operations**.
+**Team:** Nishchal, Manideep
+
+**Design document:** [docs/Final-Project_Team-5_Deliverable-1.docx](docs/Final-Project_Team-5_Deliverable-1.docx)
+
+**Repository:** https://github.com/Nishchal-dl/Wearable-Sensor-Based-Sports-Activity-Recognition
 
 ---
 
 ## Problem
 
-Raw wearable output — acceleration, rotation, magnetometer, and heart rate at ~100 Hz —
-is only useful once it is interpreted into *what a person is doing* and *how hard they are
-working*. Two things make this hard:
+Raw wearable output (~100 Hz motion signals plus heart rate) is only useful once it is
+interpreted as *what a person is doing*. The data is heavily imbalanced across
+activities, so **macro-F1** is the headline metric.
 
-1. **The ML problem is non-trivial** — severe class imbalance (transient/other activity
-   dominates), and models that score well on seen users often fail to generalize to a
-   **new person** whose movement signature differs.
-2. Reproducibility, deployment path, monitoring."
+## What is implemented
 
-## What the system does
-
-- **Two prediction heads** — multi-class activity recognition, plus a derived 3-class
-  intensity estimate (each activity mapped to a light / moderate / vigorous MET category).
-- **Generalization measurement** — Leave-One-Subject-Out (LOSO) cross-validation as
-  the primary evaluation scheme, so scores reflect performance on *unseen people*, with
-  **macro-F1** as the headline metric (because of class imbalance).
-- **A modeling trade-off** — an interpretable classical baseline compared against
-  a higher-capacity deep model.
-- **MLOps infrastructure** — S3 data lakes, SageMaker processing / training / HPO jobs,
-  an evaluation-gated model registry, batch-transform deployment, CloudWatch alerts, and a CI/CD pipeline.
+- **Data foundation:** S3 data lake, Glue catalog and Athena tables over raw and curated data, with EDA charts.
+- **Features:** 512-sample (5.12 s) windows with 50% overlap. Each window gets statistical features from the IMU channels plus heart rate, stored in an offline SageMaker Feature Store group.
+- **Splits:** chronological 40/10/10/40 train/validation/test/production split per subject and activity. Test and production use subjects the model has already seen, so scores are optimistic compared with a subject-disjoint evaluation.
+- **Models:** a depth-3 decision-tree benchmark (plus a majority-class floor), and SageMaker built-in XGBoost 1.7-1 with fixed hyperparameters, early stopping and Debugger rules.
+- **SageMaker Pipeline** `pamap2-har-pipeline`: preprocess → train → evaluate → a macro-F1 gate (default 0.85) → register in the model registry (`PendingManualApproval`) → batch transform → post-process predictions.
+- **Governance:** a SageMaker Model Card filled from the training job, model package and reports.
+- **Monitoring:** Model Monitor data-quality and model-quality jobs, pipeline execution monitoring, CloudWatch alarms and dashboard, and SHAP explainability.
+- **Teardown:** removes every project resource (dry run by default).
+- **Unit tests** for the shared code under `tests/`.
 
 ## Dataset
 
@@ -47,47 +42,42 @@ working*. Two things make this hard:
 | Source  | PAMAP2 Physical Activity Monitoring — UCI ML Repository (id=231), DOI 10.24432/C5NW2H |
 | Volume  | 3,850,505 instances; 54 columns; ~656 MB; 9 subjects; 18 activities |
 | Sampling| 100 Hz IMU + ~9 Hz heart rate |
-| Sensors | Tri-axial accelerometer (±16g / ±6g), gyroscope, magnetometer (hand/chest/ankle IMUs), heart rate, activity label |
-| Files   | Space-separated `.dat` text files, one per subject per session (Protocol + Optional) |
+| Sensors | Hand/chest/ankle IMUs (accelerometer, gyroscope, magnetometer), heart rate, activity label |
 | License | CC BY 4.0 |
 
-The dataset is downloaded from the UCI link above and place the `.dat` files under `data/raw/`
-(or point the pipeline at your S3 raw bucket).
+The data is not committed to git. `2_data_pipeline.ipynb` downloads it and stores it in S3.
 
-## Pipeline overview
+## Data in S3
 
-1. **Ingest** — parse the 54 columns; drop the 4 invalid orientation columns per IMU.
-2. **Clean** — handle sparse heart rate (forward-fill / interpolate); optional downsample
-   from 100 Hz; normalize/standardize per channel; remove/relabel transient `activityID 0`.
-3. **Window** — fixed sliding windows (e.g. 512 samples / 5.12 s, 50% overlap) with
-   majority-vote labels.
-4. **Feature-engineer** — statistical + frequency-domain features (mean, std, min, max,
-   energy, dominant frequency) from acceleration/gyroscope; mean/max heart rate.
-5. **Train** — classical baseline and deep model, with HPO.
-6. **Evaluate** — LOSO cross-validation; macro-F1, accuracy, per-class precision/recall,
-   confusion matrix under a subject-disjoint split.
-7. **Gate & register** — promote to the model registry only past a macro-F1 threshold.
-8. **Deploy** — batch transform for session summaries.
-9. **Monitor** — model quality, data drift vs. training baseline, infrastructure metrics.
+Everything lives in one bucket, `pamap2-har-<account-id>-us-east-1`, created by `1_setup.ipynb`:
 
-## Success criteria
+| Prefix | Contents |
+|---|---|
+| `raw/` | Original PAMAP2 `.dat` files |
+| `curated/` | Cleaned Parquet, partitioned by session and subject |
+| `athena-results/` | Athena query output |
+| `features/` | Feature Store offline store; `features/splits/` holds the train/validation/test/production Parquet, XGBoost CSVs, `feature_columns.json` and `label_map.json` |
+| `models/` | Benchmark and XGBoost reports, and pipeline outputs (`models/pipeline/`): model artifacts, evaluation, predictions |
+| `monitoring/` | Data-quality, model-quality and pipeline monitoring runs, and `monitoring/reports/index.json` |
 
-**ML quality**
-- Primary: macro-F1 under LOSO **competitive with published benchmarks (~0.85+)**.
-- Supporting: accuracy, per-class precision/recall, confusion matrix on a subject-disjoint
-  final split; a documented baseline-vs-deep-model trade-off.
+Catalog: the Glue database `pamap2_har` (tables `raw_pamap2` and `curated_pamap2`), the Athena workgroup `pamap2-har-wg`, and the Feature Group `pamap2-har-windows`.
 
-## Scope
+## Repository layout
 
-**In scope** — the full pipeline (ingestion → windowing → features → training + HPO →
-evaluation gate → registry → batch deployment → monitoring) on PAMAP2; real AWS/SageMaker
-infrastructure via Boto CDK; both classical and deep models; LOSO evaluation; intensity
-estimation; monitoring; CI/CD; reproducible experiment tracking.
+```
+notebooks/   1_setup → 2_data_pipeline → 3_train_evaluate_deploy → 4_monitoring_reports → 5_teardown
+src/pamap2/  shared code (config, schema, features, split, evaluation, benchmark, monitoring, model card, teardown)
+src/pamap2/pipeline/  SageMaker Pipeline step scripts (preprocess, evaluate, postprocess)
+tests/       pytest unit tests
+docs/        design document (Deliverable 1), video, presentation, architecture diagrams
+```
 
-**Out of scope** — a consumer mobile app or on-device/firmware inference; medical diagnosis
-or clinical decision-making; identifying individuals from gait/biometrics; collecting new
-sensor data or activities beyond PAMAP2's 18 labels; a real-time streaming endpoint
-(batch is primary; real-time is a future enhancement).
+## Future work
+
+These items are not implemented: subject-disjoint (leave-one-subject-out) evaluation,
+a deep-learning model to compare against XGBoost, hyperparameter tuning, a model that
+predicts intensity directly, infrastructure as code, a CI/CD workflow, and a real-time
+endpoint.
 
 ## Running the notebooks
 
@@ -116,5 +106,3 @@ Run in SageMaker Studio, in order:
 Run order: `1_setup`, `2_data_pipeline`, `3_train_evaluate_deploy`, `4_monitoring_reports`, then `5_teardown.ipynb` as the last step.
 
 Teardown: `notebooks/5_teardown.ipynb` (logic in `src/pamap2/teardown.py`) removes every project resource (SageMaker Pipeline `pamap2-har-pipeline` with its executions and pipeline-created models, S3 bucket incl. versions, Feature Group, Glue/Athena, SageMaker models/packages, Model Card, CloudWatch alarms/dashboard/log streams). It is a dry run by default; set `DRY_RUN=False` and `CONFIRM` to the bucket name to delete, `KEEP_DATA=True` to keep the bucket and `raw/`+`curated/`. 
-
-Shared code lives in `src/pamap2/` (`config.py`, `schema.py`, `features.py`, `split.py`, `evaluation.py`, `benchmark.py`, `monitoring.py`, `model_card.py`, `pipeline_outputs.py`, `pipeline/`). Tests: `uv run pytest tests -q`.
